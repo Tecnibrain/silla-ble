@@ -47,10 +47,12 @@ Ten siempre a mano el botón de encendido físico del control. Esta herramienta 
     <input type="text" id="extraSvc" placeholder="ej. 0000ffe0-0000-1000-8000-00805f9b34fb, fff0">
   </label>
   <div class="row">
-    <button id="btnConnect">Buscar y conectar</button>
+    <button id="btnConnectF">Buscar solo módulos tipo control</button>
+    <button id="btnConnect" class="sec">Buscar todos</button>
     <button id="btnDisconnect" class="sec" disabled>Desconectar</button>
     <span id="status">Desconectado</span>
   </div>
+  <p class="mut">“Dispositivo desconocido o no compatible” solo significa que ese aparato no anuncia un nombre; no quiere decir que no sirva. Para reconocer la silla: abre la lista con el control <b>apagado</b>, ciérrala, enciende el control, ábrela otra vez con el celular pegado al control: el que aparece nuevo y con señal llena es la silla.</p>
   <p class="mut">Requiere Chrome/Edge en Android, Windows, macOS o Linux (iPhone: usar la app “Bluefy”). La página debe abrirse por https o desde localhost.</p>
 </div>
 
@@ -187,11 +189,15 @@ function parseUuid(s) {
   if (/^(0x)?[0-9a-f]{4}$/.test(s)) return parseInt(s.replace('0x', ''), 16);
   return s;
 }
-async function connect() {
+async function connect(filtered) {
   if (!navigator.bluetooth) { alert('Este navegador no soporta Web Bluetooth. Usa Chrome en Android o PC.'); return; }
   const extra = $('extraSvc').value.split(',').map(parseUuid).filter(Boolean);
   try {
-    device = await navigator.bluetooth.requestDevice({ acceptAllDevices: true, optionalServices: [...KNOWN_SERVICES, ...extra] });
+    const optionalServices = [...KNOWN_SERVICES, ...extra];
+    // Filtro: solo dispositivos que anuncian un servicio serie típico (oculta celulares, relojes, TV…)
+    const generic = [0x1800, 0x1801, 0x180a, 0x180f];
+    const filters = optionalServices.filter((u) => !generic.includes(u)).map((u) => ({ services: [u] }));
+    device = await navigator.bluetooth.requestDevice(filtered ? { filters, optionalServices } : { acceptAllDevices: true, optionalServices });
     device.addEventListener('gattserverdisconnected', onDisconnected);
     log(`Conectando a "${device.name ?? '(sin nombre)'}" id=${device.id}`);
     const server = await device.gatt.connect();
@@ -347,7 +353,8 @@ document.addEventListener('visibilitychange', () => { if (document.hidden) stopA
 window.addEventListener('blur', () => { if (holding) stopAll(); });
 
 // ---------- UI ----------
-$('btnConnect').onclick = connect;
+$('btnConnect').onclick = () => connect(false);
+$('btnConnectF').onclick = () => connect(true);
 $('btnDisconnect').onclick = () => { stopAll(); device?.gatt.disconnect(); };
 $('stop').onclick = stopAll;
 $('btnClear').onclick = () => { $('log').textContent = ''; logLines = []; };
