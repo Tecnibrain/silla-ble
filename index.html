@@ -29,6 +29,11 @@
   #stop { display:block; width:100%; padding:18px; font-size:1.3rem; font-weight:700; background:var(--red); margin-top:8px; }
   .warn { background:#451a03; border:1px solid #b45309; border-radius:8px; padding:10px; }
   #status.on { color:var(--ok); }
+  #wizStep { font-size:1.25rem; font-weight:700; margin:8px 0; min-height:2em; }
+  #wizBar { height:8px; background:#333; border-radius:4px; overflow:hidden; margin:8px 0; }
+  #wizBar div { height:100%; width:0; background:var(--ok); transition:width .2s linear; }
+  #report { height:220px; font-size:12px; }
+  .big { padding:14px 18px; font-size:1.1rem; }
 </style>
 </head>
 <body>
@@ -47,6 +52,30 @@ Ten siempre a mano el botón de encendido físico del control. Esta herramienta 
     <span id="status">Desconectado</span>
   </div>
   <p class="mut">Requiere Chrome/Edge en Android, Windows, macOS o Linux (iPhone: usar la app “Bluefy”). La página debe abrirse por https o desde localhost.</p>
+</div>
+
+<div class="card" id="wizCard">
+  <h2>⭐ Asistente para identificar el protocolo (empieza aquí)</h2>
+  <p class="mut">No necesitas saber nada técnico. Conéctate arriba, luego pulsa el botón verde y sigue las instrucciones.
+  La app graba lo que manda el controlador en cada paso y arma un informe para enviármelo.</p>
+  <p class="warn" style="margin:8px 0">Antes de empezar: silla <b>vacía</b>, <b>ruedas motrices elevadas</b> (sobre libros o bloques) y el control encendido.</p>
+  <button id="wizStart" class="big" style="background:var(--ok)" disabled>Iniciar asistente</button>
+  <div id="wizStep" class="mut">Primero conéctate (sección 1).</div>
+  <div id="wizBar"><div></div></div>
+  <div class="row">
+    <button id="wizRec" class="big" style="display:none">Grabar este paso</button>
+    <button id="wizSkip" class="sec" style="display:none">Saltar paso</button>
+  </div>
+  <div id="wizOut" style="display:none">
+    <h2 style="margin-top:12px">Informe listo ✅</h2>
+    <p class="mut">Pulsa <b>Compartir</b> (o <b>Copiar</b>) y pégalo en el chat conmigo.</p>
+    <textarea id="report" readonly></textarea>
+    <div class="row" style="margin-top:6px">
+      <button id="wizShare" class="big">Compartir</button>
+      <button id="wizCopy" class="sec">Copiar</button>
+      <button id="wizDl" class="sec">Descargar .txt</button>
+    </div>
+  </div>
 </div>
 
 <div class="card">
@@ -178,6 +207,9 @@ function onDisconnected() {
   $('status').textContent = 'Desconectado'; $('status').className = '';
   $('btnDisconnect').disabled = true;
   ctl = null;
+  subscribed.clear(); wiz.capturing = false;
+  $('wizStart').disabled = true; $('wizRec').style.display = $('wizSkip').style.display = 'none';
+  $('wizStep').textContent = 'Se perdió la conexión. Vuelve a conectar y reinicia el asistente.';
 }
 async function explore(server) {
   chars = [];
@@ -201,8 +233,7 @@ async function explore(server) {
       }));
       if (pr.includes('notify') || pr.includes('indicate')) row.appendChild(btn('Suscribir', async (b) => {
         try {
-          c.addEventListener('characteristicvaluechanged', (ev) => log(`RX ${c.uuid.slice(4, 8)}: ${hex(ev.target.value)}`));
-          await c.startNotifications(); b.disabled = true; b.textContent = 'Suscrito'; log('Suscrito a ' + c.uuid);
+          await subscribe(c); b.disabled = true; b.textContent = 'Suscrito';
         } catch (e) { log('ERROR suscripción: ' + e.message); }
       }));
       if (pr.includes('write') || pr.includes('writeWithoutResponse')) {
@@ -225,6 +256,20 @@ async function explore(server) {
   if (savedIdx >= 0) sel.value = savedIdx;
   ctl = chars[sel.value] ?? null;
   log(`Servicios: ${services.length}, características: ${chars.length}`);
+  $('wizStart').disabled = false; $('wizStep').textContent = 'Conectado. Pulsa “Iniciar asistente”.';
+}
+const subscribed = new Set();
+async function subscribe(c) {
+  if (subscribed.has(c)) return;
+  c.addEventListener('characteristicvaluechanged', (ev) => onRx(c, ev.target.value));
+  await c.startNotifications();
+  subscribed.add(c);
+  log('Suscrito a ' + c.uuid);
+}
+function onRx(c, value) {
+  const h = hex(value);
+  if (wiz.capturing) wiz.data.push({ step: wiz.steps[wiz.i].key, uuid: c.uuid, h });
+  if (!wiz.capturing || $('logTx').checked) log(`RX ${c.uuid.slice(4, 8)}: ${h}`);
 }
 function btn(text, fn) { const b = document.createElement('button'); b.className = 'sec'; b.textContent = text; b.onclick = () => fn(b); return b; }
 async function writeTo(c, data) {
@@ -316,6 +361,115 @@ $('armed').onchange = (e) => { stick.classList.toggle('locked', !e.target.checke
 $('spd').oninput = (e) => { $('spdVal').textContent = e.target.value; };
 CFG_KEYS.forEach((k) => $(k).addEventListener('change', saveCfg));
 loadCfg();
+
+// ---------- asistente ----------
+const STEP_SECONDS = 6;
+const wiz = {
+  i: 0, capturing: false, data: [], reads: [],
+  steps: [
+    { key: 'reposo',    txt: 'No toques nada. Deja el joystick en el centro.' },
+    { key: 'adelante',  txt: 'Empuja el joystick HACIA ADELANTE y mantenlo.' },
+    { key: 'atras',     txt: 'Lleva el joystick HACIA ATRÁS y mantenlo.' },
+    { key: 'izquierda', txt: 'Lleva el joystick a la IZQUIERDA y mantenlo.' },
+    { key: 'derecha',   txt: 'Lleva el joystick a la DERECHA y mantenlo.' },
+    { key: 'vel_mas',   txt: 'Pulsa varias veces el botón de velocidad (+).' },
+    { key: 'vel_menos', txt: 'Pulsa varias veces el botón de velocidad (−).' },
+    { key: 'bocina',    txt: 'Pulsa el botón de la bocina (pito).' },
+    { key: 'reposo2',   txt: 'Suelta todo otra vez. Joystick al centro.' },
+  ],
+};
+function showStep() {
+  const st = wiz.steps[wiz.i];
+  $('wizStep').textContent = `Paso ${wiz.i + 1} de ${wiz.steps.length}: ${st.txt}`;
+  $('wizBar').firstElementChild.style.width = '0';
+  $('wizRec').style.display = $('wizSkip').style.display = '';
+  $('wizRec').disabled = false; $('wizRec').textContent = 'Grabar este paso';
+}
+async function wizStart() {
+  if (!device?.gatt.connected) { alert('Primero conéctate al controlador.'); return; }
+  wiz.i = 0; wiz.data = []; wiz.reads = [];
+  $('wizOut').style.display = 'none';
+  $('wizStep').textContent = 'Preparando…';
+  for (const c of chars) {
+    const pr = propsOf(c);
+    if (pr.includes('read')) { try { wiz.reads.push(`${c.uuid}: ${hex(await c.readValue())}`); } catch (e) { wiz.reads.push(`${c.uuid}: error ${e.message}`); } }
+    if (pr.includes('notify') || pr.includes('indicate')) { try { await subscribe(c); } catch (e) { log(`No se pudo suscribir a ${c.uuid}: ${e.message}`); } }
+  }
+  showStep();
+}
+function wizRecord() {
+  $('wizRec').disabled = true; $('wizRec').textContent = 'Grabando… mantén la posición';
+  wiz.capturing = true;
+  const t0 = Date.now();
+  const tick = setInterval(() => {
+    const f = Math.min(1, (Date.now() - t0) / (STEP_SECONDS * 1000));
+    $('wizBar').firstElementChild.style.width = (f * 100) + '%';
+    if (f >= 1) { clearInterval(tick); wiz.capturing = false; wizNext(); }
+  }, 100);
+}
+function wizNext() {
+  wiz.i++;
+  if (wiz.i < wiz.steps.length) return showStep();
+  $('wizRec').style.display = $('wizSkip').style.display = 'none';
+  $('wizStep').textContent = '¡Terminado! Mira abajo.';
+  $('report').value = buildReport();
+  $('wizOut').style.display = '';
+}
+function topPackets(list) {
+  const m = new Map(); list.forEach((h) => m.set(h, (m.get(h) || 0) + 1));
+  return [...m.entries()].sort((a, b) => b[1] - a[1]);
+}
+function diffBytes(a, b) {
+  const A = a.split(' '), B = b.split(' '), out = [];
+  for (let i = 0; i < Math.max(A.length, B.length); i++) if (A[i] !== B[i]) out.push(`byte${i}:${A[i] ?? '--'}→${B[i] ?? '--'}`);
+  return out.join(' ') || 'igual';
+}
+function buildReport() {
+  const L = [];
+  L.push('=== INFORME SILLA BLE ===');
+  L.push(`Fecha: ${new Date().toISOString()}`);
+  L.push(`Dispositivo: ${device?.name ?? '(sin nombre)'}  id=${device?.id}`);
+  L.push(`Navegador: ${navigator.userAgent}`);
+  L.push('', '--- Características ---');
+  chars.forEach((c) => L.push(`${c.service.uuid} / ${c.uuid} [${propsOf(c).join(',')}]`));
+  L.push('', '--- Lecturas ---', ...(wiz.reads.length ? wiz.reads : ['(ninguna legible)']));
+  L.push('', '--- Datos recibidos por paso ---');
+  if (!wiz.data.length) {
+    L.push('NO SE RECIBIÓ NINGÚN DATO durante los pasos.');
+    L.push('(El controlador no informa el joystick por Bluetooth; habrá que capturar la app oficial.)');
+  }
+  const uuids = [...new Set(wiz.data.map((d) => d.uuid))];
+  for (const u of uuids) {
+    L.push('', `## ${u}`);
+    const base = topPackets(wiz.data.filter((d) => d.uuid === u && d.step === 'reposo').map((d) => d.h))[0]?.[0];
+    for (const st of wiz.steps) {
+      const tp = topPackets(wiz.data.filter((d) => d.uuid === u && d.step === st.key).map((d) => d.h));
+      const n = tp.reduce((a, x) => a + x[1], 0);
+      L.push(`[${st.key}] ${n} paquetes, ${tp.length} distintos`);
+      tp.slice(0, 6).forEach(([h, k]) => L.push(`   ${k}x  ${h}${base && h !== base ? '   Δ ' + diffBytes(base, h) : ''}`));
+    }
+  }
+  L.push('', '=== FIN ===');
+  return L.join('\n');
+}
+$('wizStart').onclick = wizStart;
+$('wizRec').onclick = wizRecord;
+$('wizSkip').onclick = () => { if (!wiz.capturing) wizNext(); };
+$('wizCopy').onclick = async () => { try { await navigator.clipboard.writeText($('report').value); $('wizCopy').textContent = 'Copiado ✓'; } catch { $('report').select(); document.execCommand('copy'); } };
+$('wizShare').onclick = async () => {
+  const text = $('report').value;
+  try {
+    const file = new File([text], 'informe-silla-ble.txt', { type: 'text/plain' });
+    if (navigator.canShare?.({ files: [file] })) await navigator.share({ files: [file], title: 'Informe silla BLE' });
+    else if (navigator.share) await navigator.share({ title: 'Informe silla BLE', text });
+    else $('wizCopy').click();
+  } catch (e) { if (e.name !== 'AbortError') $('wizCopy').click(); }
+};
+$('wizDl').onclick = () => {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([$('report').value], { type: 'text/plain' }));
+  a.download = `informe-silla-ble-${Date.now()}.txt`; a.click();
+};
 </script>
 </body>
 </html>

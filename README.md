@@ -17,6 +17,12 @@ Web Bluetooth exige `https://` o `localhost`. Opciones:
 - Android: subir la carpeta a cualquier hosting https (o GitHub Pages) y abrirla en Chrome.
 - iPhone: Safari no soporta Web Bluetooth; usar la app gratuita **Bluefy**.
 
+## Lo más fácil: el asistente
+
+1. Abre el enlace en Chrome (Android), pulsa **Buscar y conectar** y elige el controlador.
+2. Pulsa **Iniciar asistente** y sigue las instrucciones en pantalla (reposo, adelante, atrás, izquierda, derecha, velocidad, bocina). Cada paso graba 6 segundos.
+3. Al final pulsa **Compartir** o **Copiar** y envía el informe. El informe ya marca qué bytes cambian respecto al reposo.
+
 ## Paso clave: descubrir el protocolo
 
 El fabricante no publica el protocolo Bluetooth, así que primero hay que averiguar **qué bytes** espera el controlador.
