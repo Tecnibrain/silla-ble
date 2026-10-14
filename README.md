@@ -1,5 +1,7 @@
 # Control remoto BLE para silla de ruedas (controlador Melaunch)
 
+**Abrir:** https://tecnibrain.github.io/silla-ble/
+
 Página web única (`index.html`) que usa **Web Bluetooth** para:
 
 1. **Conectarse** al controlador de la silla.
