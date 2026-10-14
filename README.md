@@ -7,13 +7,11 @@ Página web única (`index.html`) que usa **Web Bluetooth** para:
 3. **Registrar** todo el tráfico (y descargarlo en .txt).
 4. **Controlar** la silla con un joystick táctil, usando una plantilla de comando configurable.
 
-> No está publicada con el sitio de Viajes Waira: Vite solo compila las páginas listadas en `vite.config.js`.
-
 ## Cómo abrirla
 
 Web Bluetooth exige `https://` o `localhost`. Opciones:
 
-- PC: `npx serve silla-ble` y abrir `http://localhost:3000` en Chrome/Edge.
+- PC: `npx serve .` y abrir `http://localhost:3000` en Chrome/Edge.
 - Android: subir la carpeta a cualquier hosting https (o GitHub Pages) y abrirla en Chrome.
 - iPhone: Safari no soporta Web Bluetooth; usar la app gratuita **Bluefy**.
 
