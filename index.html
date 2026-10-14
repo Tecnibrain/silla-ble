@@ -1,0 +1,321 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<title>Control silla BLE</title>
+<style>
+  :root { --bg:#111; --fg:#eee; --mut:#888; --card:#1c1c1c; --acc:#3b82f6; --red:#dc2626; --ok:#16a34a; }
+  * { box-sizing:border-box; }
+  body { margin:0; font:15px/1.4 system-ui,sans-serif; background:var(--bg); color:var(--fg); padding:12px 16px 40px; }
+  h1 { font-size:1.2rem; margin:0 0 8px; } h2 { font-size:1rem; margin:0 0 8px; }
+  .card { background:var(--card); border-radius:10px; padding:12px; margin:12px 0; }
+  button { font:inherit; padding:8px 12px; border:0; border-radius:8px; background:var(--acc); color:#fff; cursor:pointer; }
+  button:disabled { opacity:.4; cursor:default; }
+  button.sec { background:#333; }
+  input, select, textarea { font:inherit; background:#000; color:var(--fg); border:1px solid #333; border-radius:6px; padding:6px; }
+  input[type=text], textarea { width:100%; font-family:ui-monospace,monospace; }
+  label { display:block; margin:6px 0; }
+  .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+  .mut { color:var(--mut); font-size:.85rem; }
+  #log { height:220px; overflow:auto; background:#000; font:12px/1.35 ui-monospace,monospace; padding:6px; border-radius:6px; white-space:pre-wrap; }
+  .svc { margin:8px 0; border-left:3px solid var(--acc); padding-left:8px; }
+  .chr { margin:6px 0 6px 8px; font-family:ui-monospace,monospace; font-size:12px; }
+  .chr .row { margin-top:4px; }
+  .chr input[type=text] { width:auto; flex:1; min-width:120px; }
+  #stick { width:260px; height:260px; max-width:80vw; max-height:80vw; border-radius:50%; background:#222; border:2px solid #444; position:relative; margin:12px auto; touch-action:none; }
+  #knob { width:80px; height:80px; border-radius:50%; background:var(--acc); position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); pointer-events:none; }
+  #stick.locked { opacity:.3; }
+  #stop { display:block; width:100%; padding:18px; font-size:1.3rem; font-weight:700; background:var(--red); margin-top:8px; }
+  .warn { background:#451a03; border:1px solid #b45309; border-radius:8px; padding:10px; }
+  #status.on { color:var(--ok); }
+</style>
+</head>
+<body>
+<h1>Control silla de ruedas por Bluetooth (BLE)</h1>
+<p class="warn"><b>Seguridad:</b> haz todas las pruebas con la silla <b>vacía y con las ruedas motrices elevadas</b> del piso.
+Ten siempre a mano el botón de encendido físico del control. Esta herramienta no reemplaza los frenos ni las protecciones del controlador.</p>
+
+<div class="card">
+  <h2>1. Conexión</h2>
+  <label>UUIDs de servicio extra (separados por coma, opcional)
+    <input type="text" id="extraSvc" placeholder="ej. 0000ffe0-0000-1000-8000-00805f9b34fb, fff0">
+  </label>
+  <div class="row">
+    <button id="btnConnect">Buscar y conectar</button>
+    <button id="btnDisconnect" class="sec" disabled>Desconectar</button>
+    <span id="status">Desconectado</span>
+  </div>
+  <p class="mut">Requiere Chrome/Edge en Android, Windows, macOS o Linux (iPhone: usar la app “Bluefy”). La página debe abrirse por https o desde localhost.</p>
+</div>
+
+<div class="card">
+  <h2>2. Explorador de servicios</h2>
+  <p class="mut">Suscríbete a las características con “notify”, mueve el joystick físico de la silla y observa qué bytes cambian en el registro. Así se descubre el protocolo.</p>
+  <div id="tree" class="mut">Conéctate para ver los servicios.</div>
+</div>
+
+<div class="card">
+  <h2>3. Registro</h2>
+  <div id="log"></div>
+  <div class="row" style="margin-top:6px">
+    <button class="sec" id="btnClear">Limpiar</button>
+    <button class="sec" id="btnExport">Descargar registro</button>
+    <label class="row" style="margin:0"><input type="checkbox" id="logTx" checked> registrar envíos del joystick</label>
+  </div>
+</div>
+
+<div class="card">
+  <h2>4. Control remoto</h2>
+  <label>Característica de escritura
+    <select id="ctlChar" style="width:100%"><option value="">— conéctate primero —</option></select>
+  </label>
+  <label>Plantilla del comando de movimiento (hex). Marcadores: <code>{x}</code> <code>{y}</code> <code>{cs}</code>
+    <input type="text" id="tplMove" value="AA {x} {y} {cs}">
+  </label>
+  <label>Comando de parada (hex, mismos marcadores; x=y=0)
+    <input type="text" id="tplStop" value="AA {x} {y} {cs}">
+  </label>
+  <div class="row">
+    <label>Codificación de x/y
+      <select id="enc">
+        <option value="int8">int8 con signo (-100…100)</option>
+        <option value="off128">byte con offset 128 (28…228)</option>
+        <option value="off100">byte con offset 100 (0…200)</option>
+      </select>
+    </label>
+    <label>Checksum {cs}
+      <select id="cs">
+        <option value="sum8">suma de bytes &amp; 0xFF</option>
+        <option value="xor">XOR de bytes</option>
+        <option value="none">sin checksum</option>
+      </select>
+    </label>
+    <label>Cada <input type="number" id="period" value="50" min="20" max="500" style="width:70px"> ms</label>
+    <label><input type="checkbox" id="invY"> invertir Y</label>
+  </div>
+  <label>Velocidad máxima: <b id="spdVal">30</b>%
+    <input type="range" id="spd" min="5" max="100" value="30" style="width:100%">
+  </label>
+  <label class="row"><input type="checkbox" id="armed"> Confirmo que la silla está vacía con las ruedas elevadas (habilita el joystick)</label>
+  <div id="stick" class="locked"><div id="knob"></div></div>
+  <p class="mut" style="text-align:center">Solo se envía movimiento mientras mantienes el dedo. Al soltar, cambiar de pestaña o perder conexión se envía la parada.</p>
+  <button id="stop">PARAR</button>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const CFG_KEYS = ['extraSvc','tplMove','tplStop','enc','cs','period','spd','invY'];
+
+// Servicios BLE-serie típicos de módulos chinos. Web Bluetooth solo deja acceder a los servicios listados aquí.
+const KNOWN_SERVICES = [
+  0xffe0, 0xffe5, 0xfff0, 0xfee7, 0xff00, 0xffb0, 0xae00, 0xae30, 0x1800, 0x1801, 0x180a, 0x180f,
+  '6e400001-b5a3-f393-e0a9-e50e24dcca9e', // Nordic UART
+  '49535343-fe7d-4ae5-8fa9-9fafd205e455', // Microchip/ISSC
+  '0000fff0-0000-1000-8000-00805f9b34fb',
+  'e7810a71-73ae-499d-8c15-faa9aef0c3f2', // BK/TI
+  '0000ff12-0000-1000-8000-00805f9b34fb',
+];
+
+let device = null, chars = [], ctl = null, timer = null, pos = { x: 0, y: 0 }, holding = false, writing = false, logLines = [];
+
+// ---------- utilidades ----------
+const hex = (buf) => [...new Uint8Array(buf.buffer ?? buf)].map((b) => b.toString(16).padStart(2, '0')).join(' ').toUpperCase();
+function parseHex(s) {
+  const clean = s.replace(/0x/gi, '').replace(/[^0-9a-f]/gi, '');
+  if (clean.length % 2) throw new Error('Hex con número impar de dígitos');
+  return new Uint8Array(clean.match(/../g)?.map((h) => parseInt(h, 16)) ?? []);
+}
+function log(msg) {
+  const t = new Date().toISOString().slice(11, 23);
+  const line = `${t}  ${msg}`;
+  logLines.push(line);
+  const el = $('log');
+  el.textContent += line + '\n';
+  if (el.textContent.length > 200000) el.textContent = el.textContent.slice(-150000);
+  el.scrollTop = el.scrollHeight;
+}
+function propsOf(c) {
+  const p = c.properties;
+  return ['read','write','writeWithoutResponse','notify','indicate'].filter((k) => p[k]);
+}
+function saveCfg() { try { CFG_KEYS.forEach((k) => localStorage.setItem('silla.' + k, $(k).type === 'checkbox' ? $(k).checked : $(k).value)); } catch {} }
+function loadCfg() {
+  try {
+    CFG_KEYS.forEach((k) => {
+      const v = localStorage.getItem('silla.' + k);
+      if (v === null) return;
+      if ($(k).type === 'checkbox') $(k).checked = v === 'true'; else $(k).value = v;
+    });
+  } catch {}
+  $('spdVal').textContent = $('spd').value;
+}
+
+// ---------- conexión ----------
+function parseUuid(s) {
+  s = s.trim().toLowerCase();
+  if (!s) return null;
+  if (/^(0x)?[0-9a-f]{4}$/.test(s)) return parseInt(s.replace('0x', ''), 16);
+  return s;
+}
+async function connect() {
+  if (!navigator.bluetooth) { alert('Este navegador no soporta Web Bluetooth. Usa Chrome en Android o PC.'); return; }
+  const extra = $('extraSvc').value.split(',').map(parseUuid).filter(Boolean);
+  try {
+    device = await navigator.bluetooth.requestDevice({ acceptAllDevices: true, optionalServices: [...KNOWN_SERVICES, ...extra] });
+    device.addEventListener('gattserverdisconnected', onDisconnected);
+    log(`Conectando a "${device.name ?? '(sin nombre)'}" id=${device.id}`);
+    const server = await device.gatt.connect();
+    $('status').textContent = 'Conectado: ' + (device.name ?? device.id);
+    $('status').className = 'on';
+    $('btnDisconnect').disabled = false;
+    await explore(server);
+  } catch (e) { log('ERROR: ' + e.message); }
+}
+function onDisconnected() {
+  log('Desconectado');
+  stopLoop();
+  $('status').textContent = 'Desconectado'; $('status').className = '';
+  $('btnDisconnect').disabled = true;
+  ctl = null;
+}
+async function explore(server) {
+  chars = [];
+  const tree = $('tree'); tree.textContent = ''; tree.className = '';
+  let services = [];
+  try { services = await server.getPrimaryServices(); } catch (e) { log('Sin servicios accesibles: ' + e.message + ' — agrega el UUID en “servicios extra” (puedes verlo con nRF Connect).'); }
+  for (const s of services) {
+    const sd = document.createElement('div'); sd.className = 'svc';
+    sd.innerHTML = `<b>Servicio</b> <code>${s.uuid}</code>`;
+    tree.appendChild(sd);
+    let cs = [];
+    try { cs = await s.getCharacteristics(); } catch (e) { log(`No se pudieron leer características de ${s.uuid}: ${e.message}`); }
+    for (const c of cs) {
+      const idx = chars.push(c) - 1;
+      const pr = propsOf(c);
+      const d = document.createElement('div'); d.className = 'chr';
+      d.innerHTML = `<div>${c.uuid} <span class="mut">[${pr.join(', ')}]</span></div>`;
+      const row = document.createElement('div'); row.className = 'row';
+      if (pr.includes('read')) row.appendChild(btn('Leer', async () => {
+        try { log(`LEER ${c.uuid}: ${hex(await c.readValue())}`); } catch (e) { log('ERROR lectura: ' + e.message); }
+      }));
+      if (pr.includes('notify') || pr.includes('indicate')) row.appendChild(btn('Suscribir', async (b) => {
+        try {
+          c.addEventListener('characteristicvaluechanged', (ev) => log(`RX ${c.uuid.slice(4, 8)}: ${hex(ev.target.value)}`));
+          await c.startNotifications(); b.disabled = true; b.textContent = 'Suscrito'; log('Suscrito a ' + c.uuid);
+        } catch (e) { log('ERROR suscripción: ' + e.message); }
+      }));
+      if (pr.includes('write') || pr.includes('writeWithoutResponse')) {
+        const inp = document.createElement('input'); inp.type = 'text'; inp.placeholder = 'hex, ej. AA 55 01';
+        row.appendChild(inp);
+        row.appendChild(btn('Enviar', async () => {
+          try { const data = parseHex(inp.value); await writeTo(c, data); log(`TX ${c.uuid.slice(4, 8)}: ${hex(data)}`); } catch (e) { log('ERROR escritura: ' + e.message); }
+        }));
+      }
+      d.appendChild(row); sd.appendChild(d);
+    }
+  }
+  const sel = $('ctlChar'); sel.innerHTML = '<option value="">— elige —</option>';
+  chars.forEach((c, i) => {
+    const pr = propsOf(c);
+    if (pr.includes('write') || pr.includes('writeWithoutResponse')) sel.add(new Option(`${c.service.uuid.slice(4, 8)} / ${c.uuid}`, i));
+  });
+  let saved = null; try { saved = localStorage.getItem('silla.ctlUuid'); } catch {}
+  const savedIdx = chars.findIndex((c) => c.uuid === saved);
+  if (savedIdx >= 0) sel.value = savedIdx;
+  ctl = chars[sel.value] ?? null;
+  log(`Servicios: ${services.length}, características: ${chars.length}`);
+}
+function btn(text, fn) { const b = document.createElement('button'); b.className = 'sec'; b.textContent = text; b.onclick = () => fn(b); return b; }
+async function writeTo(c, data) {
+  if (c.properties.writeWithoutResponse) return c.writeValueWithoutResponse(data);
+  return c.writeValueWithResponse(data);
+}
+
+// ---------- comandos ----------
+function encode(v) {
+  v = Math.round(v);
+  switch ($('enc').value) {
+    case 'off128': return (v + 128) & 0xff;
+    case 'off100': return (v + 100) & 0xff;
+    default: return v & 0xff; // int8 complemento a dos
+  }
+}
+function build(tpl, x, y) {
+  const parts = tpl.replace(/\{x\}/g, ' X ').replace(/\{y\}/g, ' Y ').replace(/\{cs\}/g, ' CS ').trim().split(/\s+/);
+  const out = [];
+  for (const p of parts) {
+    if (p === 'X') out.push(encode(x));
+    else if (p === 'Y') out.push(encode(y));
+    else if (p === 'CS') {
+      const mode = $('cs').value;
+      if (mode === 'sum8') out.push(out.reduce((a, b) => a + b, 0) & 0xff);
+      else if (mode === 'xor') out.push(out.reduce((a, b) => a ^ b, 0));
+    } else out.push(...parseHex(p));
+  }
+  return new Uint8Array(out);
+}
+async function send(tpl, x, y) {
+  if (!ctl || writing) return;
+  writing = true;
+  try {
+    const data = build(tpl, x, y);
+    await writeTo(ctl, data);
+    if ($('logTx').checked) log(`TX x=${Math.round(x)} y=${Math.round(y)}: ${hex(data)}`);
+  } catch (e) { log('ERROR envío: ' + e.message); }
+  finally { writing = false; }
+}
+async function sendStop() {
+  if (!ctl) return;
+  writing = false; // la parada tiene prioridad
+  for (let i = 0; i < 3; i++) await send($('tplStop').value, 0, 0);
+}
+function startLoop() {
+  stopLoop();
+  timer = setInterval(() => {
+    const k = $('spd').value / 100;
+    const y = ($('invY').checked ? -pos.y : pos.y) * k;
+    send($('tplMove').value, pos.x * k, y);
+  }, Math.max(20, +$('period').value || 50));
+}
+function stopLoop() { if (timer) clearInterval(timer); timer = null; }
+function stopAll() { holding = false; pos = { x: 0, y: 0 }; moveKnob(0, 0); stopLoop(); sendStop(); }
+
+// ---------- joystick ----------
+const stick = $('stick'), knob = $('knob');
+function moveKnob(x, y) { knob.style.transform = `translate(calc(-50% + ${x}px), calc(-50% + ${y}px))`; }
+function handle(ev) {
+  const r = stick.getBoundingClientRect(), R = r.width / 2;
+  let dx = ev.clientX - (r.left + R), dy = ev.clientY - (r.top + R);
+  const d = Math.hypot(dx, dy), max = R - 40;
+  if (d > max) { dx *= max / d; dy *= max / d; }
+  moveKnob(dx, dy);
+  pos = { x: (dx / max) * 100, y: (-dy / max) * 100 }; // y positivo = adelante
+}
+stick.addEventListener('pointerdown', (ev) => {
+  if (!$('armed').checked || !ctl) { if (!ctl) log('Elige la característica de escritura primero'); return; }
+  holding = true; stick.setPointerCapture(ev.pointerId); handle(ev); startLoop();
+});
+stick.addEventListener('pointermove', (ev) => { if (holding) handle(ev); });
+['pointerup', 'pointercancel', 'lostpointercapture'].forEach((t) => stick.addEventListener(t, () => { if (holding) stopAll(); }));
+document.addEventListener('visibilitychange', () => { if (document.hidden) stopAll(); });
+window.addEventListener('blur', () => { if (holding) stopAll(); });
+
+// ---------- UI ----------
+$('btnConnect').onclick = connect;
+$('btnDisconnect').onclick = () => { stopAll(); device?.gatt.disconnect(); };
+$('stop').onclick = stopAll;
+$('btnClear').onclick = () => { $('log').textContent = ''; logLines = []; };
+$('btnExport').onclick = () => {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([logLines.join('\n')], { type: 'text/plain' }));
+  a.download = `silla-ble-${Date.now()}.txt`; a.click();
+};
+$('ctlChar').onchange = (e) => { ctl = chars[e.target.value] ?? null; try { localStorage.setItem('silla.ctlUuid', ctl?.uuid ?? ''); } catch {} };
+$('armed').onchange = (e) => { stick.classList.toggle('locked', !e.target.checked); if (!e.target.checked) stopAll(); };
+$('spd').oninput = (e) => { $('spdVal').textContent = e.target.value; };
+CFG_KEYS.forEach((k) => $(k).addEventListener('change', saveCfg));
+loadCfg();
+</script>
+</body>
+</html>
